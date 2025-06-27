@@ -1,0 +1,98 @@
+"""
+pipeline_min.py  –  Nature Sustainability 연구계획서 검증용
+샘플 데이터(jeju_tourism_sample_v2.csv)만 있으면 동작합니다.
+pip install pandas numpy ruptures statsmodels pmdarima scikit-learn tensorflow shap tqdm matplotlib
+"""
+import warnings, math, json, numpy as np, pandas as pd, matplotlib.pyplot as plt
+import ruptures as rpt, pmdarima as pmd
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+from sklearn.metrics import mean_squared_error, mean_absolute_error
+import tensorflow as tf
+from tensorflow.keras import layers, models
+from pathlib import Path
+
+warnings.filterwarnings("ignore")
+DATA = "../data/jeju_tourism_sample_v2.csv"   # 상위 디렉토리로 수정
+EXOG = ["air_seats","exchange_rate","precipitation_mm","google_trends","covid_cases"]
+SEQ  = 24
+
+# ---------- 0. Load -----------------------------------------------------------------
+df = pd.read_csv(DATA, parse_dates=["date"]).set_index("date")
+train, test = df[df["set"]=="train"], df[df["set"]=="test"]
+
+# ---------- 1. 구조적 단절 -----------------------------------------------------------
+algo = rpt.Binseg(model="l2").fit(df["tourists"].values)
+bkps_idx = algo.predict(pen="bic", n_bkps=5)
+breaks = [df.index[i] for i in bkps_idx[:-1]]
+print("Breaks:", breaks)
+
+# ---------- 2. SARIMA ---------------------------------------------------------------
+step_arima = pmd.auto_arima(train["tourists"], exogenous=train[EXOG],
+                            seasonal=True, m=12, trace=False, error_action="ignore")
+sar = SARIMAX(train["tourists"], exog=train[EXOG],
+              order=step_arima.order, seasonal_order=step_arima.seasonal_order,
+              enforce_stationarity=False).fit(disp=False)
+sar_pred = sar.get_forecast(steps=len(test), exog=test[EXOG]).predicted_mean
+
+# ---------- 3. LSTM -----------------------------------------------------------------
+def to_supervised(df):
+    X,y=[],[]
+    for i in range(len(df)-SEQ):
+        X.append(df.iloc[i:i+SEQ][EXOG+["tourists"]].values)
+        y.append(df.iloc[i+SEQ]["tourists"])
+    return np.array(X), np.array(y)
+
+X_tr,y_tr = to_supervised(train)
+X_te,y_te = to_supervised(pd.concat([train.tail(SEQ),test]))
+
+lstm = models.Sequential([
+    layers.Input(shape=(SEQ, X_tr.shape[2])),
+    layers.LSTM(32), layers.Dropout(0.2), layers.Dense(1)
+])
+lstm.compile(optimizer="adam", loss="mse")
+lstm.fit(X_tr, y_tr, validation_split=0.1, epochs=50,
+         batch_size=32, verbose=0,
+         callbacks=[tf.keras.callbacks.EarlyStopping(patience=5, restore_best_weights=True)])
+lstm_pred = lstm.predict(X_te).flatten()
+
+# ---------- 4. Transformer (축약형) --------------------------------------------------
+def build_trans(n_feat):
+    inp = layers.Input(shape=(SEQ,n_feat))
+    x = layers.MultiHeadAttention(num_heads=2,key_dim=64)(inp,inp)
+    x = layers.LayerNormalization(epsilon=1e-6)(x+inp)
+    x = layers.GlobalAveragePooling1D()(x)
+    out = layers.Dense(1)(x)
+    m = models.Model(inp,out); m.compile(optimizer="adam", loss="mse"); return m
+
+trans = build_trans(X_tr.shape[2])
+trans.fit(X_tr, y_tr, validation_split=0.1, epochs=50,
+          batch_size=32, verbose=0,
+          callbacks=[tf.keras.callbacks.EarlyStopping(patience=5, restore_best_weights=True)])
+trans_pred = trans.predict(X_te).flatten()
+
+# ---------- 5. 지표 & 결과 -----------------------------------------------------------
+def metric(y,p): return math.sqrt(mean_squared_error(y,p)), mean_absolute_error(y,p)
+rmse_s, mae_s = metric(test["tourists"], sar_pred)
+rmse_l, mae_l = metric(y_te, lstm_pred)
+rmse_t, mae_t = metric(y_te, trans_pred)
+
+print(f"SARIMA      RMSE {rmse_s:,.0f}  MAE {mae_s:,.0f}")
+print(f"LSTM        RMSE {rmse_l:,.0f}  MAE {mae_l:,.0f}")
+print(f"Transformer RMSE {rmse_t:,.0f}  MAE {mae_t:,.0f}")
+
+# ---------- 6. 간단 정책시나리오 ----------------------------------------------------
+gap = sar_pred.values - lstm_pred
+grdp_loss_pct = gap.sum()*350_000*1.75/1e9 / 29_200 * 100
+print(f"GRDP 손실 개선률 ≈ {grdp_loss_pct:.2f}%p")
+
+# ---------- 7. 저장 ---------------------------------------------------------------
+Path("../artifacts").mkdir(exist_ok=True)
+pd.Series(lstm_pred, index=test.index[-len(lstm_pred):]).to_csv("../artifacts/lstm_pred.csv")
+with open("../artifacts/results.json","w") as f:
+    json.dump({
+        "breaks":[d.strftime("%Y-%m-%d") for d in breaks],
+        "metrics":{"sarima":{"rmse":rmse_s,"mae":mae_s},
+                   "lstm":{"rmse":rmse_l,"mae":mae_l},
+                   "trans":{"rmse":rmse_t,"mae":mae_t}},
+        "grdp_improve_pct":grdp_loss_pct}, f, indent=2)
+print("Artifacts saved → ../artifacts/")
