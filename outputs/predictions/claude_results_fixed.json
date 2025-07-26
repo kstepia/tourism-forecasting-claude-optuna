@@ -1,0 +1,66 @@
+{
+  "model_comparison": [
+    {
+      "model": "SARIMA",
+      "rmse": 8220.895195710902,
+      "mae": 7153.1293759851,
+      "mape": 8.806541334456691
+    },
+    {
+      "model": "LSTM_Optimized",
+      "rmse": 123169.04338347359,
+      "mae": 119326.6015625,
+      "mape": 147.3714689839626
+    },
+    {
+      "model": "Transformer_Optimized",
+      "rmse": 98664.78585594762,
+      "mae": 91355.9609375,
+      "mape": 113.00219894247834
+    },
+    {
+      "model": "Ensemble",
+      "rmse": 48198.10383842993,
+      "mae": 46251.972418019286,
+      "mape": 57.15387974042814
+    }
+  ],
+  "best_model": {
+    "model": "SARIMA",
+    "rmse": 8220.895195710902,
+    "mae": 7153.1293759851,
+    "mape": 8.806541334456691
+  },
+  "structural_breaks": [
+    "2012-02-01",
+    "2015-11-01",
+    "2016-04-01",
+    "2020-01-01",
+    "2020-06-01"
+  ],
+  "hyperparameter_optimization": {
+    "lstm_best_params": {
+      "n_units": 96,
+      "n_layers": 2,
+      "dropout": 0.2022158781354724,
+      "learning_rate": 0.0023032972248982642
+    },
+    "transformer_best_params": {
+      "n_heads": 2,
+      "key_dim": 32,
+      "ff_dim": 64,
+      "n_layers": 2,
+      "dropout": 0.335280728422637,
+      "learning_rate": 0.0006232153299537603
+    }
+  },
+  "economic_impact": {
+    "forecast_improvement": 0.0,
+    "grdp_impact_pct": 0.0
+  },
+  "ensemble_weights": [
+    0.6,
+    0.2,
+    0.2
+  ]
+}
