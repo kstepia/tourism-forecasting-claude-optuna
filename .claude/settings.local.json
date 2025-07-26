@@ -11,7 +11,8 @@
       "Bash(ls:*)",
       "Bash(export DOWNLOAD_DIR=data/raw)",
       "WebFetch(domain:visitjeju.or.kr)",
-      "WebFetch(domain:www.visitjeju.or.kr)"
+      "WebFetch(domain:www.visitjeju.or.kr)",
+      "Bash(git commit:*)"
     ],
     "deny": []
   }

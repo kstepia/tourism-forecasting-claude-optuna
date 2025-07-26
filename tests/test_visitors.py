@@ -33,7 +33,7 @@ class TestJejuVisitorsCrawler(unittest.TestCase):
         print("📅 최근 7일 테스트 데이터 수집 중...")
         
         cls.crawler = JejuVisitorsCrawler()
-        cls.test_data_path = project_root / "tests" / "test_visitor_data.parquet"
+        cls.test_data_path = project_root / "tests" / "test_visitor_data.csv"
         
         # 테스트용 임시 다운로드 디렉토리 설정
         cls.temp_dir = tempfile.mkdtemp()
@@ -62,8 +62,8 @@ class TestJejuVisitorsCrawler(unittest.TestCase):
                         (all_data['date'].dt.date <= end_date)
                     ].copy()
                     
-                    # 테스트 데이터 저장
-                    recent_data.to_parquet(cls.test_data_path, index=False)
+                    # 테스트 데이터 저장 (CSV 형식)
+                    recent_data.to_csv(cls.test_data_path, index=False, encoding='utf-8')
                     cls.test_data = recent_data
                     
                     print(f"✅ 테스트 데이터 수집 완료: {len(recent_data)}건")
@@ -252,10 +252,10 @@ class TestDataValidation(unittest.TestCase):
     
     def setUp(self):
         """각 테스트 전 실행"""
-        self.test_data_path = project_root / "tests" / "test_visitor_data.parquet"
+        self.test_data_path = project_root / "tests" / "test_visitor_data.csv"
         
         if self.test_data_path.exists():
-            self.test_data = pd.read_parquet(self.test_data_path)
+            self.test_data = pd.read_csv(self.test_data_path)
         else:
             self.test_data = pd.DataFrame()
     
