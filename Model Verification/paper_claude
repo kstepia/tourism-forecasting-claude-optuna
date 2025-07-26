@@ -58,19 +58,26 @@ sar_pred = sar.get_forecast(steps=len(test), exog=test[EXOG]).predicted_mean
 print(f"✅ SARIMA optimized: {step_arima.order} x {step_arima.seasonal_order}")
 
 # ---------- 3. Advanced LSTM with Hyperparameter Optimization ------------------
-def create_sequences(df, seq_len=SEQ):
+def create_sequences(df_features, df_target, seq_len=SEQ):
+    """Create sequences without data leakage"""
     X, y = [], []
-    for i in range(len(df) - seq_len):
-        X.append(df.iloc[i:i+seq_len][EXOG+["tourists"]].values)
-        y.append(df.iloc[i+seq_len]["tourists"])
+    for i in range(len(df_features) - seq_len):
+        # Only use exogenous features + lagged target values in X
+        X.append(df_features.iloc[i:i+seq_len][EXOG].values)
+        y.append(df_target.iloc[i+seq_len])
     return np.array(X), np.array(y)
 
-X_tr, y_tr = create_sequences(train_scaled)
-X_te, y_te = create_sequences(pd.concat([train_scaled.tail(SEQ), test_scaled]))
+# Scale target variable first
+y_tr_scaled = scaler_y.fit_transform(train["tourists"].values.reshape(-1, 1)).flatten()
+y_te_scaled = scaler_y.transform(test["tourists"].values.reshape(-1, 1)).flatten()
 
-# Scale target variable
-y_tr_scaled = scaler_y.fit_transform(y_tr.reshape(-1, 1)).flatten()
-y_te_scaled = scaler_y.transform(y_te.reshape(-1, 1)).flatten()
+# Create sequences with proper train/test split
+X_tr, y_tr_seq = create_sequences(train_scaled, pd.Series(y_tr_scaled, index=train.index))
+# For test sequences, use last SEQ points from train + test data
+combined_features = pd.concat([train_scaled.tail(SEQ), test_scaled])
+combined_target = pd.concat([pd.Series(y_tr_scaled[-SEQ:], index=train.tail(SEQ).index), 
+                            pd.Series(y_te_scaled, index=test.index)])
+X_te, y_te_seq = create_sequences(combined_features, combined_target)
 
 def create_optimized_lstm(trial):
     """Optuna objective function for LSTM optimization"""
@@ -101,7 +108,7 @@ def objective_lstm(trial):
     early_stopping = callbacks.EarlyStopping(patience=10, restore_best_weights=True)
     pruning = TFKerasPruningCallback(trial, 'val_loss')
     
-    history = model.fit(X_tr, y_tr_scaled, 
+    history = model.fit(X_tr, y_tr_seq, 
                        validation_split=0.2, 
                        epochs=100, batch_size=32, verbose=0,
                        callbacks=[early_stopping, pruning])
@@ -114,7 +121,7 @@ study_lstm.optimize(objective_lstm, n_trials=20, timeout=300)
 
 # Build best LSTM model
 best_lstm = create_optimized_lstm(study_lstm.best_trial)
-best_lstm.fit(X_tr, y_tr_scaled, validation_split=0.2, epochs=100, batch_size=32, verbose=0,
+best_lstm.fit(X_tr, y_tr_seq, validation_split=0.2, epochs=100, batch_size=32, verbose=0,
               callbacks=[callbacks.EarlyStopping(patience=10, restore_best_weights=True)])
 
 lstm_pred_scaled = best_lstm.predict(X_te, verbose=0).flatten()
@@ -166,7 +173,7 @@ def objective_transformer(trial):
     early_stopping = callbacks.EarlyStopping(patience=10, restore_best_weights=True)
     pruning = TFKerasPruningCallback(trial, 'val_loss')
     
-    history = model.fit(X_tr, y_tr_scaled,
+    history = model.fit(X_tr, y_tr_seq,
                        validation_split=0.2,
                        epochs=100, batch_size=32, verbose=0,
                        callbacks=[early_stopping, pruning])
@@ -179,7 +186,7 @@ study_trans.optimize(objective_transformer, n_trials=20, timeout=300)
 
 # Build best Transformer model
 best_trans = create_optimized_transformer(study_trans.best_trial)
-best_trans.fit(X_tr, y_tr_scaled, validation_split=0.2, epochs=100, batch_size=32, verbose=0,
+best_trans.fit(X_tr, y_tr_seq, validation_split=0.2, epochs=100, batch_size=32, verbose=0,
                callbacks=[callbacks.EarlyStopping(patience=10, restore_best_weights=True)])
 
 trans_pred_scaled = best_trans.predict(X_te, verbose=0).flatten()
@@ -203,9 +210,9 @@ def enhanced_metrics(y_true, y_pred, model_name):
 
 results = []
 results.append(enhanced_metrics(test["tourists"], sar_pred, "SARIMA"))
-results.append(enhanced_metrics(y_te, lstm_pred, "LSTM_Optimized"))
-results.append(enhanced_metrics(y_te, trans_pred, "Transformer_Optimized"))
-results.append(enhanced_metrics(y_te, ensemble_pred, "Ensemble"))
+results.append(enhanced_metrics(test["tourists"], lstm_pred, "LSTM_Optimized"))
+results.append(enhanced_metrics(test["tourists"], trans_pred, "Transformer_Optimized"))
+results.append(enhanced_metrics(test["tourists"], ensemble_pred, "Ensemble"))
 
 print("\n📊 Model Performance Comparison:")
 print("="*60)
@@ -236,18 +243,18 @@ print(f"Forecast improvement: {improvement:,.0f} tourists/month")
 print(f"GRDP impact: {grdp_impact:.2f}%p")
 
 # ---------- 8. Enhanced Artifacts Saving ----------------------------------------
-Path("../artifacts").mkdir(exist_ok=True)
+Path("../outputs/predictions").mkdir(parents=True, exist_ok=True)
 
 # Save all predictions
 predictions_df = pd.DataFrame({
-    'date': test.index[-len(y_te):],
-    'actual': y_te,
-    'sarima': sar_pred.values[:len(y_te)],
+    'date': test.index,
+    'actual': test["tourists"].values,
+    'sarima': sar_pred.values,
     'lstm_optimized': lstm_pred,
     'transformer_optimized': trans_pred,
     'ensemble': ensemble_pred
 })
-predictions_df.to_csv("../artifacts/claude_predictions.csv", index=False)
+predictions_df.to_csv("../outputs/predictions/claude_predictions_fixed.csv", index=False)
 
 # Save enhanced results
 enhanced_results = {
@@ -265,10 +272,10 @@ enhanced_results = {
     "ensemble_weights": ensemble_weights.tolist()
 }
 
-with open("../artifacts/claude_results.json", "w") as f:
+with open("../outputs/predictions/claude_results_fixed.json", "w") as f:
     json.dump(enhanced_results, f, indent=2, default=str)
 
-print(f"\n💾 Enhanced artifacts saved → ../artifacts/")
-print(f"📈 Predictions saved: claude_predictions.csv")
-print(f"📋 Results saved: claude_results.json")
+print(f"\n💾 Enhanced artifacts saved → ../outputs/predictions/")
+print(f"📈 Predictions saved: claude_predictions_fixed.csv")
+print(f"📋 Results saved: claude_results_fixed.json")
 print("\n🎉 Optimized pipeline completed successfully!")
